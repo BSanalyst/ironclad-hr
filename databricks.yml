@@ -29,6 +29,9 @@ variables:
   quality_rules_path:
     description: Path to quality_rules.json in workspace
     default: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/dev/files/config/quality_rules.json
+  workspace_files_path:
+    description: Base path for deployed bundle files in workspace
+    default: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/dev/files
 
 resources:
 
@@ -96,12 +99,11 @@ resources:
 
       tasks:
         - task_key: data_generation
-          description: "Generate HR data files for the configured period"
+          description: "Branch on run_mode — demo or ongoing"
           condition_task:
             op: EQUAL_TO
             left: "{{job.parameters.run_mode}}"
             right: demo
-          # Branches to demo or ongoing generation based on run_mode
 
         - task_key: data_generation_ongoing
           description: "Generate a single period of HR data"
@@ -109,19 +111,19 @@ resources:
             - task_key: data_generation
               outcome: "false"
           notebook_task:
-            notebook_path: ./notebooks/data_generation.py
+            notebook_path: ${var.workspace_files_path}/notebooks/data_generation.py
             base_parameters:
               year: "{{job.parameters.year}}"
               month: "{{job.parameters.month}}"
               catalog: "{{job.parameters.catalog}}"
 
         - task_key: data_generation_demo
-          description: "Generate multiple periods of HR data with injected scenarios"
+          description: "Generate multiple periods with injected scenarios"
           depends_on:
             - task_key: data_generation
               outcome: "true"
           notebook_task:
-            notebook_path: ./notebooks/data_generation_demo.py
+            notebook_path: ${var.workspace_files_path}/notebooks/data_generation_demo.py
             base_parameters:
               start_year: "{{job.parameters.year}}"
               start_month: "{{job.parameters.month}}"
@@ -150,7 +152,7 @@ resources:
           depends_on:
             - task_key: silver_pipeline
           notebook_task:
-            notebook_path: ./notebooks/statistical_validation.py
+            notebook_path: ${var.workspace_files_path}/notebooks/statistical_validation.py
             base_parameters:
               catalog: "{{job.parameters.catalog}}"
               period: "{{job.parameters.year}}-{{job.parameters.month}}"
@@ -169,7 +171,7 @@ resources:
           depends_on:
             - task_key: gold_pipeline
           notebook_task:
-            notebook_path: ./notebooks/steward_review.py
+            notebook_path: ${var.workspace_files_path}/notebooks/steward_review.py
             base_parameters:
               catalog: "{{job.parameters.catalog}}"
 
@@ -195,7 +197,7 @@ resources:
 
       tasks:
         - task_key: silver_restatement_pipeline
-          description: "Reprocess corrected files through Silver for affected periods"
+          description: "Reprocess corrected files through Silver"
           pipeline_task:
             pipeline_id: ${resources.pipelines.silver_pipeline.id}
             full_refresh: false
@@ -213,7 +215,7 @@ resources:
           depends_on:
             - task_key: gold_refresh
           notebook_task:
-            notebook_path: ./notebooks/restatement_audit.py
+            notebook_path: ${var.workspace_files_path}/notebooks/restatement_audit.py
             base_parameters:
               catalog: "{{job.parameters.catalog}}"
               employee_id: "{{job.parameters.employee_id}}"
@@ -229,6 +231,7 @@ targets:
     variables:
       catalog: ironclad_hr
       notification_email: benjaminstringer1994@gmail.com
+      workspace_files_path: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/dev/files
       quality_rules_path: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/dev/files/config/quality_rules.json
 
   test:
@@ -236,6 +239,7 @@ targets:
     variables:
       catalog: ironclad_hr_test
       notification_email: benjaminstringer1994@gmail.com
+      workspace_files_path: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/test/files
       quality_rules_path: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/test/files/config/quality_rules.json
 
   prod:
@@ -243,4 +247,5 @@ targets:
     variables:
       catalog: ironclad_hr
       notification_email: benjaminstringer1994@gmail.com
+      workspace_files_path: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/prod/files
       quality_rules_path: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/prod/files/config/quality_rules.json
