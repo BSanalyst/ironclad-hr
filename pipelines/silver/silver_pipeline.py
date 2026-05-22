@@ -55,7 +55,7 @@ def get_department_snapshot(latest_version):
     df = spark.table(f"{catalog}.bronze.bronze_departments")
     if latest_version is not None:
         df = df.filter(F.col("_ingested_at") > latest_version)
-    if df.rdd.isEmpty():
+    if df.limit(1).count() == 0:
         return None
     version = df.agg(F.max("_ingested_at")).collect()[0][0]
     snapshot = df.select(
@@ -83,7 +83,7 @@ def get_job_role_snapshot(latest_version):
     df = spark.table(f"{catalog}.bronze.bronze_job_roles")
     if latest_version is not None:
         df = df.filter(F.col("_ingested_at") > latest_version)
-    if df.rdd.isEmpty():
+    if df.limit(1).count() == 0:
         return None
     version = df.agg(F.max("_ingested_at")).collect()[0][0]
     snapshot = df.select(
@@ -113,7 +113,7 @@ def get_employee_snapshot(latest_version):
         df = df.filter(F.col("_ingested_at") > latest_version)
     # Drop CRITICAL violations — null employee_id
     df = df.filter(F.col("employee_id").isNotNull())
-    if df.rdd.isEmpty():
+    if df.limit(1).count() == 0:
         return None
     version = df.agg(F.max("_ingested_at")).collect()[0][0]
     snapshot = (
@@ -160,7 +160,7 @@ def get_contract_snapshot(latest_version):
         F.col("contract_type").isNotNull() &
         F.col("start_date").isNotNull()
     )
-    if df.rdd.isEmpty():
+    if df.limit(1).count() == 0:
         return None
     version = df.agg(F.max("_ingested_at")).collect()[0][0]
     snapshot = df.select(
