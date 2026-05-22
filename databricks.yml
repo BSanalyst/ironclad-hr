@@ -129,6 +129,7 @@ resources:
 
         - task_key: bronze_pipeline
           description: "Ingest files from landing volume into Bronze streaming tables"
+          run_if: AT_LEAST_ONE_SUCCESS
           depends_on:
             - task_key: data_generation_ongoing
             - task_key: data_generation_demo
