@@ -96,9 +96,9 @@ role_ids = [r[0] for r in roles_data]
 emp_spec = (
     dg.DataGenerator(spark, name="employees", rows=num_employees, partitions=4)
     .withIdOutput()
-    .withColumn("employee_id", StringType(), template=r"EMP\d{5}", baseColumn="id")
+    .withColumn("employee_id", StringType(), template=r"EMPddddd", baseColumn="id")
     .withColumn("full_name", StringType(), template=r"\w \w")
-    .withColumn("email", StringType(), template=r"\w.\w@ironcladhr.com", baseColumn="id")
+    .withColumn("email", StringType(), template=r"dddd.dddd@ironcladhr.com", baseColumn="id")
     .withColumn("gender", StringType(), values=["Male", "Female", "Non-binary"], weights=[45, 45, 10])
     .withColumn("hire_date", StringType(),
                 dataRange=dg.DateRange(begin_date_str, end_date_str, "days=1"),
@@ -106,7 +106,7 @@ emp_spec = (
     .withColumn("termination_date", StringType(), values=[""], percentNulls=1.0)
     .withColumn("department_id", StringType(), values=dept_ids, random=True)
     .withColumn("role_id", StringType(), values=role_ids, random=True)
-    .withColumn("manager_id", StringType(), template=r"EMP\d{5}", baseColumn="id")
+    .withColumn("manager_id", StringType(), template=r"EMPddddd", baseColumn="id")
     .withColumn("nationality", StringType(),
                 values=["British", "American", "French", "German", "Indian", "Australian"],
                 random=True)
@@ -126,8 +126,8 @@ print(f"Employees written: {emp_df.count()} rows")
 contract_spec = (
     dg.DataGenerator(spark, name="contracts", rows=num_employees, partitions=4)
     .withIdOutput()
-    .withColumn("contract_id", StringType(), template=r"CON\d{5}", baseColumn="id")
-    .withColumn("employee_id", StringType(), template=r"EMP\d{5}", baseColumn="id")
+    .withColumn("contract_id", StringType(), template=r"CONddddd", baseColumn="id")
+    .withColumn("employee_id", StringType(), template=r"EMPddddd", baseColumn="id")
     .withColumn("contract_type", StringType(),
                 values=["Permanent", "Contractor", "Fixed-Term"], weights=[70, 20, 10])
     .withColumn("start_date", StringType(),
@@ -150,7 +150,7 @@ print(f"Contracts written: {contract_df.count()} rows")
 comp_spec = (
     dg.DataGenerator(spark, name="compensation", rows=num_employees, partitions=4)
     .withIdOutput()
-    .withColumn("employee_id", StringType(), template=r"EMP\d{5}", baseColumn="id")
+    .withColumn("employee_id", StringType(), template=r"EMPddddd", baseColumn="id")
     .withColumn("salary", LongType(), minValue=30000, maxValue=200000, step=1000, random=True)
     .withColumn("currency", StringType(), values=["GBP"], weights=[100])
     .withColumn("effective_date", StringType(),
@@ -181,7 +181,7 @@ print(f"Compensation written: {comp_df.count()} rows")
 payroll_spec = (
     dg.DataGenerator(spark, name="payroll_events", rows=num_employees, partitions=4)
     .withIdOutput()
-    .withColumn("employee_id", StringType(), template=r"EMP\d{5}", baseColumn="id")
+    .withColumn("employee_id", StringType(), template=r"EMPddddd", baseColumn="id")
     .withColumn("period", StringType(), values=[period], weights=[100])
     .withColumn("gross_pay", LongType(), minValue=2500, maxValue=16667, step=100, random=True)
     .withColumn("deductions", LongType(), minValue=500, maxValue=3000, step=50, random=True)

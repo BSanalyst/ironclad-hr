@@ -1,7 +1,7 @@
 # Databricks notebook source
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
-from pyspark.sql.types import StringType
+from pyspark.sql.types import StringType, IntegerType
 from datetime import date, timedelta
 
 # COMMAND ----------
@@ -11,10 +11,10 @@ catalog = spark.conf.get("catalog", "ironclad_hr")
 
 # COMMAND ----------
 
-# DBTITLE 1, dim_date — static dimension, built once
+# DBTITLE 1, dim_date — static dimension, built once via append_flow
 dp.create_streaming_table(
     name="dim_date",
-    comment="Static date dimension covering 2018-2030. Built once via append_flow.",
+    comment="Static date dimension covering 2018-2030. Built once.",
     table_properties={"quality": "silver"}
 )
 
@@ -44,86 +44,88 @@ def load_dim_date():
 
 # COMMAND ----------
 
-# DBTITLE 1, dim_department — SCD Type 2 from snapshot
+# DBTITLE 1, dim_department source view
+@dp.view
+def v_bronze_departments():
+    """
+    Clean snapshot view of Bronze departments.
+    parent_department_id lands in _rescued_data due to null values - exposed as null explicitly.
+    """
+    return (
+        spark.table(f"{catalog}.bronze.bronze_departments")
+        .filter(F.col("department_id").isNotNull())
+        .select(
+            "department_id",
+            "name",
+            "cost_centre",
+            F.lit(None).cast(StringType()).alias("parent_department_id")
+        )
+        .distinct()
+    )
+
+# COMMAND ----------
+
+# DBTITLE 1, dim_department — SCD Type 2
 dp.create_streaming_table(
     name="dim_department",
-    comment="Department dimension. SCD Type 2. Tracks restructures, renames, merges.",
+    comment="Department dimension. SCD Type 2.",
     table_properties={"quality": "silver"}
 )
 
-def get_department_snapshot(latest_version):
-    df = spark.table(f"{catalog}.bronze.bronze_departments")
-    if latest_version is not None:
-        df = df.filter(F.col("_ingested_at") > latest_version)
-    if df.limit(1).count() == 0:
-        return None
-    version = df.agg(F.max("_ingested_at")).collect()[0][0]
-    snapshot = df.select(
-        "department_id", "name", "cost_centre",
-        F.lit(None).cast(StringType()).alias("parent_department_id")
-    ).distinct()
-    return (snapshot, version)
-
 dp.create_auto_cdc_from_snapshot_flow(
     target="dim_department",
-    source=get_department_snapshot,
+    source="v_bronze_departments",
     keys=["department_id"],
     stored_as_scd_type=2
 )
 
 # COMMAND ----------
 
-# DBTITLE 1, dim_job_role — SCD Type 2 from snapshot
+# DBTITLE 1, dim_job_role source view
+@dp.view
+def v_bronze_job_roles():
+    """Clean snapshot view of Bronze job roles."""
+    return (
+        spark.table(f"{catalog}.bronze.bronze_job_roles")
+        .filter(F.col("role_id").isNotNull())
+        .select("role_id", "title", "band", "function", "job_family")
+        .distinct()
+    )
+
+# COMMAND ----------
+
+# DBTITLE 1, dim_job_role — SCD Type 2
 dp.create_streaming_table(
     name="dim_job_role",
-    comment="Job role dimension. SCD Type 2. Tracks band and family changes.",
+    comment="Job role dimension. SCD Type 2.",
     table_properties={"quality": "silver"}
 )
 
-def get_job_role_snapshot(latest_version):
-    df = spark.table(f"{catalog}.bronze.bronze_job_roles")
-    if latest_version is not None:
-        df = df.filter(F.col("_ingested_at") > latest_version)
-    if df.limit(1).count() == 0:
-        return None
-    version = df.agg(F.max("_ingested_at")).collect()[0][0]
-    snapshot = df.select(
-        "role_id", "title", "band", "function", "job_family"
-    ).distinct()
-    return (snapshot, version)
-
 dp.create_auto_cdc_from_snapshot_flow(
     target="dim_job_role",
-    source=get_job_role_snapshot,
+    source="v_bronze_job_roles",
     keys=["role_id"],
     stored_as_scd_type=2
 )
 
 # COMMAND ----------
 
-# DBTITLE 1, dim_employee — SCD Type 2 from snapshot
-dp.create_streaming_table(
-    name="dim_employee",
-    comment="Employee dimension. SCD Type 2. Tracks all personal and role attribute changes.",
-    table_properties={"quality": "silver"}
-)
-
-def get_employee_snapshot(latest_version):
-    df = spark.table(f"{catalog}.bronze.bronze_employees")
-    if latest_version is not None:
-        df = df.filter(F.col("_ingested_at") > latest_version)
-    # Drop CRITICAL violations — null employee_id
-    df = df.filter(F.col("employee_id").isNotNull())
-    if df.limit(1).count() == 0:
-        return None
-    version = df.agg(F.max("_ingested_at")).collect()[0][0]
-    snapshot = (
-        df.select(
+# DBTITLE 1, dim_employee source view
+@dp.view
+def v_bronze_employees():
+    """
+    Clean snapshot view of Bronze employees.
+    - Drops null employee_id rows (logged in data_quality_log)
+    - Nulls termination_date where it precedes hire_date
+    """
+    return (
+        spark.table(f"{catalog}.bronze.bronze_employees")
+        .filter(F.col("employee_id").isNotNull())
+        .select(
             "employee_id", "full_name", "email", "gender",
             "hire_date", "termination_date",
             "department_id", "role_id", "manager_id", "nationality"
         )
-        # ERROR: null termination_date field where termination before hire
         .withColumn(
             "termination_date",
             F.when(
@@ -134,14 +136,46 @@ def get_employee_snapshot(latest_version):
         )
         .distinct()
     )
-    return (snapshot, version)
+
+# COMMAND ----------
+
+# DBTITLE 1, dim_employee — SCD Type 2
+dp.create_streaming_table(
+    name="dim_employee",
+    comment="Employee dimension. SCD Type 2.",
+    table_properties={"quality": "silver"}
+)
 
 dp.create_auto_cdc_from_snapshot_flow(
     target="dim_employee",
-    source=get_employee_snapshot,
+    source="v_bronze_employees",
     keys=["employee_id"],
     stored_as_scd_type=2
 )
+
+# COMMAND ----------
+
+# DBTITLE 1, dim_contract source view
+@dp.view
+def v_bronze_contracts():
+    """
+    Clean snapshot view of Bronze contracts.
+    Composite key: employee_id + contract_type + start_date.
+    end_date lands in _rescued_data - exposed as null explicitly.
+    """
+    return (
+        spark.table(f"{catalog}.bronze.bronze_contracts")
+        .filter(
+            F.col("employee_id").isNotNull() &
+            F.col("contract_type").isNotNull() &
+            F.col("start_date").isNotNull()
+        )
+        .select(
+            "contract_id", "employee_id", "contract_type", "start_date",
+            F.lit(None).cast(StringType()).alias("end_date")
+        )
+        .distinct()
+    )
 
 # COMMAND ----------
 
@@ -152,34 +186,16 @@ dp.create_streaming_table(
     table_properties={"quality": "silver"}
 )
 
-def get_contract_snapshot(latest_version):
-    df = spark.table(f"{catalog}.bronze.bronze_contracts")
-    if latest_version is not None:
-        df = df.filter(F.col("_ingested_at") > latest_version)
-    df = df.filter(
-        F.col("employee_id").isNotNull() &
-        F.col("contract_type").isNotNull() &
-        F.col("start_date").isNotNull()
-    )
-    if df.limit(1).count() == 0:
-        return None
-    version = df.agg(F.max("_ingested_at")).collect()[0][0]
-    snapshot = df.select(
-        "contract_id", "employee_id", "contract_type", "start_date",
-        F.lit(None).cast(StringType()).alias("end_date")
-    ).distinct()
-    return (snapshot, version)
-
 dp.create_auto_cdc_from_snapshot_flow(
     target="dim_contract",
-    source=get_contract_snapshot,
+    source="v_bronze_contracts",
     keys=["employee_id", "contract_type", "start_date"],
     stored_as_scd_type=2
 )
 
 # COMMAND ----------
 
-# DBTITLE 1, fact_headcount — monthly snapshot with tenure_days and tenure_band
+# DBTITLE 1, fact_headcount — monthly snapshot with tenure
 @dp.table(
     name="fact_headcount",
     comment="Monthly headcount snapshot. One row per employee per period. Includes tenure_days and tenure_band.",
@@ -189,28 +205,19 @@ def fact_headcount():
     return (
         spark.table(f"{catalog}.bronze.bronze_employees")
         .filter(F.col("employee_id").isNotNull())
-        .withColumn(
-            "period",
-            F.date_format(F.col("_ingested_at"), "yyyy-MM")
-        )
-        .withColumn(
-            "period_date",
-            F.to_date(F.date_format(F.col("_ingested_at"), "yyyy-MM-01"))
-        )
-        .withColumn(
-            "hire_date_parsed",
-            F.to_date(F.substring(F.col("hire_date"), 1, 10), "yyyy-MM-dd")
-        )
+        .withColumn("period", F.date_format(F.col("_ingested_at"), "yyyy-MM"))
+        .withColumn("period_date", F.to_date(F.date_format(F.col("_ingested_at"), "yyyy-MM-01")))
+        .withColumn("hire_date_parsed", F.to_date(F.substring(F.col("hire_date"), 1, 10), "yyyy-MM-dd"))
         .withColumn(
             "tenure_days",
             F.when(
                 F.col("hire_date_parsed").isNotNull(),
                 F.datediff(F.col("period_date"), F.col("hire_date_parsed"))
-            ).otherwise(F.lit(None))
+            ).otherwise(F.lit(None).cast(IntegerType()))
         )
         .withColumn(
             "tenure_days",
-            F.when(F.col("tenure_days") < 0, F.lit(None))
+            F.when(F.col("tenure_days") < 0, F.lit(None).cast(IntegerType()))
              .otherwise(F.col("tenure_days"))
         )
         .withColumn(
@@ -242,6 +249,7 @@ def fact_payroll():
     payroll = spark.table(f"{catalog}.bronze.bronze_payroll_events")
     employees = (
         spark.table(f"{catalog}.bronze.bronze_employees")
+        .filter(F.col("employee_id").isNotNull())
         .select("employee_id")
         .distinct()
     )
@@ -267,7 +275,7 @@ def fact_payroll():
 # DBTITLE 1, fact_compensation — compensation change events
 @dp.table(
     name="fact_compensation",
-    comment="Compensation per employee. One row per compensation change event. Schema evolves from month 3.",
+    comment="Compensation per employee. Schema evolves from month 3 with compensation_category.",
     table_properties={"quality": "silver"}
 )
 def fact_compensation():
@@ -298,13 +306,12 @@ def fact_compensation():
     table_properties={"quality": "silver"}
 )
 def fact_workforce_movements():
-    # Read headcount with period to derive movements
+    from pyspark.sql.window import Window
+
     headcount = spark.table(f"{catalog}.silver.fact_headcount").select(
         "employee_id", "department_id", "role_id", "period"
     )
 
-    # Self-join on employee_id to find consecutive period changes
-    from pyspark.sql.window import Window
     w = Window.partitionBy("employee_id").orderBy("period")
 
     with_prev = (
@@ -314,7 +321,6 @@ def fact_workforce_movements():
         .withColumn("prev_role_id", F.lag("role_id").over(w))
     )
 
-    # Hires: appeared this period, no previous period
     hires = (
         with_prev
         .filter(F.col("prev_period").isNull())
@@ -328,7 +334,6 @@ def fact_workforce_movements():
         )
     )
 
-    # Transfers: department or role changed
     transfers = (
         with_prev
         .filter(
@@ -355,11 +360,10 @@ def fact_workforce_movements():
 # DBTITLE 1, data_quality_log — dead letter table
 @dp.table(
     name="data_quality_log",
-    comment="Dead letter table. All records failing quality expectations. Never silently discarded.",
+    comment="Dead letter table. All records failing quality expectations.",
     table_properties={"quality": "silver"}
 )
 def data_quality_log():
-    # CRITICAL: null employee_id
     emp_critical = (
         spark.table(f"{catalog}.bronze.bronze_employees")
         .filter(F.col("employee_id").isNull())
@@ -377,7 +381,6 @@ def data_quality_log():
         )
     )
 
-    # ERROR: termination before hire
     emp_termination_error = (
         spark.table(f"{catalog}.bronze.bronze_employees")
         .filter(
@@ -399,10 +402,10 @@ def data_quality_log():
         )
     )
 
-    # ERROR: payroll referential integrity
     payroll = spark.table(f"{catalog}.bronze.bronze_payroll_events")
     employees = (
         spark.table(f"{catalog}.bronze.bronze_employees")
+        .filter(F.col("employee_id").isNotNull())
         .select("employee_id")
         .distinct()
     )
