@@ -1,39 +1,25 @@
 #!/bin/bash
 # deploy_notebooks.sh
 # Deploys notebooks to Databricks workspace as proper notebook objects
-# Run from repo root before databricks bundle deploy
+# Run from repo root: bash deploy_notebooks.sh dev
 
 TARGET=${1:-dev}
+NOTEBOOK_PATH="Workspace/Users/benjaminstringer1994@gmail.com/ironclad-hr-notebooks/${TARGET}"
 
-case $TARGET in
-  dev)
-    NOTEBOOK_PATH="/Workspace/Users/benjaminstringer1994@gmail.com/ironclad-hr-notebooks/dev"
-    ;;
-  test)
-    NOTEBOOK_PATH="/Workspace/Users/benjaminstringer1994@gmail.com/ironclad-hr-notebooks/test"
-    ;;
-  prod)
-    NOTEBOOK_PATH="/Workspace/Users/benjaminstringer1994@gmail.com/ironclad-hr-notebooks/prod"
-    ;;
-  *)
-    echo "Unknown target: $TARGET. Use dev, test, or prod."
-    exit 1
-    ;;
-esac
+echo "Deploying notebooks to /${NOTEBOOK_PATH}..."
 
-echo "Deploying notebooks to $NOTEBOOK_PATH..."
-
-databricks workspace mkdirs "$NOTEBOOK_PATH"
+databricks workspace mkdirs "/${NOTEBOOK_PATH}"
 
 for notebook in notebooks/*.py; do
   name=$(basename "$notebook" .py)
-  echo "  Importing $name..."
+  dest="/${NOTEBOOK_PATH}/${name}"
+  echo "  Importing $name -> $dest"
   databricks workspace import \
+    --file "$notebook" \
     --format SOURCE \
     --language PYTHON \
     --overwrite \
-    "$notebook" \
-    "$NOTEBOOK_PATH/$name"
+    "$dest"
 done
 
 echo "Notebook deployment complete."
