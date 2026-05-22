@@ -59,7 +59,8 @@ def get_department_snapshot(latest_version):
         return None
     version = df.agg(F.max("_ingested_at")).collect()[0][0]
     snapshot = df.select(
-        "department_id", "name", "cost_centre", "parent_department_id"
+        "department_id", "name", "cost_centre",
+        F.lit(None).cast(StringType()).alias("parent_department_id")
     ).distinct()
     return (snapshot, version)
 
@@ -164,7 +165,8 @@ def get_contract_snapshot(latest_version):
         return None
     version = df.agg(F.max("_ingested_at")).collect()[0][0]
     snapshot = df.select(
-        "contract_id", "employee_id", "contract_type", "start_date", "end_date"
+        "contract_id", "employee_id", "contract_type", "start_date",
+        F.lit(None).cast(StringType()).alias("end_date")
     ).distinct()
     return (snapshot, version)
 
