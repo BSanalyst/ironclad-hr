@@ -1,0 +1,246 @@
+bundle:
+  name: ironclad-hr
+
+workspace:
+  root_path: ~/.bundle/${bundle.name}/${bundle.target}
+
+run_as:
+  service_principal_name: 0c016e6f-766f-4013-ba1a-2d18fd7c1751
+
+permissions:
+  - level: CAN_MANAGE
+    service_principal_name: 0c016e6f-766f-4013-ba1a-2d18fd7c1751
+  - level: CAN_MANAGE
+    user_name: benjaminstringer1994@gmail.com
+
+variables:
+  catalog:
+    description: Unity Catalog catalog name
+    default: ironclad_hr
+  landing_volume:
+    description: Landing zone volume path
+    default: /Volumes/ironclad_hr/bronze/landing
+  restatement_volume:
+    description: Restatement zone volume path
+    default: /Volumes/ironclad_hr/bronze/restatement
+  notification_email:
+    description: Email address for job failure alerts
+    default: benjaminstringer1994@gmail.com
+  quality_rules_path:
+    description: Path to quality_rules.json in workspace
+    default: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/dev/files/config/quality_rules.json
+
+resources:
+
+  # ── Pipelines ──────────────────────────────────────────────────
+
+  pipelines:
+    bronze_pipeline:
+      name: ironclad-hr-bronze
+      catalog: ${var.catalog}
+      schema: bronze
+      serverless: true
+      channel: CURRENT
+      configuration:
+        landing_base: ${var.landing_volume}
+        catalog: ${var.catalog}
+      libraries:
+        - notebook:
+            path: ./pipelines/bronze/bronze_pipeline.py
+
+    silver_pipeline:
+      name: ironclad-hr-silver
+      catalog: ${var.catalog}
+      schema: silver
+      serverless: true
+      channel: CURRENT
+      configuration:
+        catalog: ${var.catalog}
+        quality_rules_path: ${var.quality_rules_path}
+      libraries:
+        - notebook:
+            path: ./pipelines/silver/silver_pipeline.py
+
+    gold_pipeline:
+      name: ironclad-hr-gold
+      catalog: ${var.catalog}
+      schema: gold
+      serverless: true
+      channel: CURRENT
+      configuration:
+        catalog: ${var.catalog}
+      libraries:
+        - notebook:
+            path: ./pipelines/gold/gold_pipeline.py
+
+  # ── Jobs ───────────────────────────────────────────────────────
+
+  jobs:
+    normal_pipeline_job:
+      name: ironclad-hr-normal-pipeline
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+
+      parameters:
+        - name: run_mode
+          default: ongoing
+        - name: year
+          default: "2025"
+        - name: month
+          default: "1"
+        - name: num_periods
+          default: "6"
+        - name: catalog
+          default: ${var.catalog}
+
+      tasks:
+        - task_key: data_generation
+          description: "Generate HR data files for the configured period"
+          condition_task:
+            op: EQUAL_TO
+            left: "{{job.parameters.run_mode}}"
+            right: demo
+          # Branches to demo or ongoing generation based on run_mode
+
+        - task_key: data_generation_ongoing
+          description: "Generate a single period of HR data"
+          depends_on:
+            - task_key: data_generation
+              outcome: "false"
+          notebook_task:
+            notebook_path: ./notebooks/data_generation.py
+            base_parameters:
+              year: "{{job.parameters.year}}"
+              month: "{{job.parameters.month}}"
+              catalog: "{{job.parameters.catalog}}"
+
+        - task_key: data_generation_demo
+          description: "Generate multiple periods of HR data with injected scenarios"
+          depends_on:
+            - task_key: data_generation
+              outcome: "true"
+          notebook_task:
+            notebook_path: ./notebooks/data_generation_demo.py
+            base_parameters:
+              start_year: "{{job.parameters.year}}"
+              start_month: "{{job.parameters.month}}"
+              num_periods: "{{job.parameters.num_periods}}"
+              catalog: "{{job.parameters.catalog}}"
+
+        - task_key: bronze_pipeline
+          description: "Ingest files from landing volume into Bronze streaming tables"
+          depends_on:
+            - task_key: data_generation_ongoing
+            - task_key: data_generation_demo
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.bronze_pipeline.id}
+            full_refresh: false
+
+        - task_key: silver_pipeline
+          description: "Transform Bronze into Silver dimensional model"
+          depends_on:
+            - task_key: bronze_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_pipeline.id}
+            full_refresh: false
+
+        - task_key: statistical_validation
+          description: "Validate headcount variance before Gold refreshes"
+          depends_on:
+            - task_key: silver_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/statistical_validation.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              period: "{{job.parameters.year}}-{{job.parameters.month}}"
+              quality_rules_path: ${var.quality_rules_path}
+
+        - task_key: gold_pipeline
+          description: "Refresh Gold materialized views"
+          depends_on:
+            - task_key: statistical_validation
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.gold_pipeline.id}
+            full_refresh: false
+
+        - task_key: steward_review
+          description: "Generate daily data quality steward review report"
+          depends_on:
+            - task_key: gold_pipeline
+          notebook_task:
+            notebook_path: ./notebooks/steward_review.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+
+    restatement_job:
+      name: ironclad-hr-restatement
+      email_notifications:
+        on_failure:
+          - ${var.notification_email}
+        on_success:
+          - ${var.notification_email}
+
+      parameters:
+        - name: employee_id
+          default: ""
+        - name: start_period
+          default: ""
+        - name: end_period
+          default: ""
+        - name: triggered_by
+          default: ""
+        - name: catalog
+          default: ${var.catalog}
+
+      tasks:
+        - task_key: silver_restatement_pipeline
+          description: "Reprocess corrected files through Silver for affected periods"
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.silver_pipeline.id}
+            full_refresh: false
+
+        - task_key: gold_refresh
+          description: "Refresh Gold after Silver restatement"
+          depends_on:
+            - task_key: silver_restatement_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.gold_pipeline.id}
+            full_refresh: false
+
+        - task_key: restatement_audit
+          description: "Log restatement operation to audit table"
+          depends_on:
+            - task_key: gold_refresh
+          notebook_task:
+            notebook_path: ./notebooks/restatement_audit.py
+            base_parameters:
+              catalog: "{{job.parameters.catalog}}"
+              employee_id: "{{job.parameters.employee_id}}"
+              start_period: "{{job.parameters.start_period}}"
+              end_period: "{{job.parameters.end_period}}"
+              triggered_by: "{{job.parameters.triggered_by}}"
+              restatement_status: SUCCESS
+
+targets:
+  dev:
+    mode: development
+    default: true
+    variables:
+      catalog: ironclad_hr
+      notification_email: benjaminstringer1994@gmail.com
+      quality_rules_path: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/dev/files/config/quality_rules.json
+
+  test:
+    mode: development
+    variables:
+      catalog: ironclad_hr_test
+      notification_email: benjaminstringer1994@gmail.com
+      quality_rules_path: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/test/files/config/quality_rules.json
+
+  prod:
+    mode: production
+    variables:
+      catalog: ironclad_hr
+      notification_email: benjaminstringer1994@gmail.com
+      quality_rules_path: /Workspace/Users/benjaminstringer1994@gmail.com/.bundle/ironclad-hr/prod/files/config/quality_rules.json
