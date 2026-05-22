@@ -48,19 +48,22 @@ def load_dim_date():
 @dp.view
 def v_bronze_departments():
     """
-    Clean snapshot view of Bronze departments.
+    Clean snapshot view of Bronze departments — latest record per department_id.
     parent_department_id lands in _rescued_data due to null values - exposed as null explicitly.
     """
+    from pyspark.sql.window import Window
+    w = Window.partitionBy("department_id").orderBy(F.col("_ingested_at").desc())
     return (
         spark.table(f"{catalog}.bronze.bronze_departments")
         .filter(F.col("department_id").isNotNull())
+        .withColumn("_row_num", F.row_number().over(w))
+        .filter(F.col("_row_num") == 1)
         .select(
             "department_id",
             "name",
             "cost_centre",
             F.lit(None).cast(StringType()).alias("parent_department_id")
         )
-        .distinct()
     )
 
 # COMMAND ----------
@@ -84,12 +87,15 @@ dp.create_auto_cdc_from_snapshot_flow(
 # DBTITLE 1, dim_job_role source view
 @dp.view
 def v_bronze_job_roles():
-    """Clean snapshot view of Bronze job roles."""
+    """Clean snapshot view of Bronze job roles — latest record per role_id."""
+    from pyspark.sql.window import Window
+    w = Window.partitionBy("role_id").orderBy(F.col("_ingested_at").desc())
     return (
         spark.table(f"{catalog}.bronze.bronze_job_roles")
         .filter(F.col("role_id").isNotNull())
+        .withColumn("_row_num", F.row_number().over(w))
+        .filter(F.col("_row_num") == 1)
         .select("role_id", "title", "band", "function", "job_family")
-        .distinct()
     )
 
 # COMMAND ----------
@@ -114,13 +120,18 @@ dp.create_auto_cdc_from_snapshot_flow(
 @dp.view
 def v_bronze_employees():
     """
-    Clean snapshot view of Bronze employees.
+    Clean snapshot view of Bronze employees — latest record per employee_id.
     - Drops null employee_id rows (logged in data_quality_log)
     - Nulls termination_date where it precedes hire_date
+    - Deduplicates by taking most recent _ingested_at per employee_id
     """
+    from pyspark.sql.window import Window
+    w = Window.partitionBy("employee_id").orderBy(F.col("_ingested_at").desc())
     return (
         spark.table(f"{catalog}.bronze.bronze_employees")
         .filter(F.col("employee_id").isNotNull())
+        .withColumn("_row_num", F.row_number().over(w))
+        .filter(F.col("_row_num") == 1)
         .select(
             "employee_id", "full_name", "email", "gender",
             "hire_date", "termination_date",
@@ -134,7 +145,6 @@ def v_bronze_employees():
                 F.lit(None)
             ).otherwise(F.col("termination_date"))
         )
-        .distinct()
     )
 
 # COMMAND ----------
@@ -159,10 +169,12 @@ dp.create_auto_cdc_from_snapshot_flow(
 @dp.view
 def v_bronze_contracts():
     """
-    Clean snapshot view of Bronze contracts.
+    Clean snapshot view of Bronze contracts — latest record per composite key.
     Composite key: employee_id + contract_type + start_date.
     end_date lands in _rescued_data - exposed as null explicitly.
     """
+    from pyspark.sql.window import Window
+    w = Window.partitionBy("employee_id", "contract_type", "start_date").orderBy(F.col("_ingested_at").desc())
     return (
         spark.table(f"{catalog}.bronze.bronze_contracts")
         .filter(
@@ -170,11 +182,12 @@ def v_bronze_contracts():
             F.col("contract_type").isNotNull() &
             F.col("start_date").isNotNull()
         )
+        .withColumn("_row_num", F.row_number().over(w))
+        .filter(F.col("_row_num") == 1)
         .select(
             "contract_id", "employee_id", "contract_type", "start_date",
             F.lit(None).cast(StringType()).alias("end_date")
         )
-        .distinct()
     )
 
 # COMMAND ----------
