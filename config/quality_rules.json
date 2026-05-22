@@ -1,0 +1,43 @@
+{
+  "thresholds": {
+    "headcount_variance_pct": 10
+  },
+  "entities": {
+    "employees": [
+      {
+        "field": "employee_id",
+        "rule": "employee_id IS NOT NULL",
+        "severity": "CRITICAL"
+      },
+      {
+        "field": "hire_date",
+        "rule": "hire_date IS NOT NULL",
+        "severity": "ERROR"
+      },
+      {
+        "field": "termination_date",
+        "rule": "termination_date IS NULL OR termination_date > hire_date",
+        "severity": "ERROR"
+      }
+    ],
+    "payroll_events": [
+      {
+        "field": "gross_pay",
+        "rule": "gross_pay IS NOT NULL AND gross_pay >= 0",
+        "severity": "ERROR"
+      },
+      {
+        "field": "net_pay",
+        "rule": "net_pay IS NOT NULL AND net_pay >= 0",
+        "severity": "ERROR"
+      }
+    ],
+    "compensation": [
+      {
+        "field": "salary",
+        "rule": "salary IS NOT NULL AND salary > 0",
+        "severity": "ERROR"
+      }
+    ]
+  }
+}
